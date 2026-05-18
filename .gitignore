@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+.agents/
+.codex/
+.chat_session_notes.json
+.chat_session_deleted/
+*.log
+.DS_Store

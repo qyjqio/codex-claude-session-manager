@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Codex / Claude Session Manager
+Comment=Browse, resume, annotate, and safely delete Codex and Claude sessions
+Exec=python3 session_manager.py
+Icon=utilities-terminal
+Terminal=false
+Categories=Utility;Development;
