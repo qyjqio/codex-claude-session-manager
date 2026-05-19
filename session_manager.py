@@ -505,9 +505,30 @@ class App(tk.Tk):
         box.grid(row=row, column=0, sticky="ew", pady=(0, 10))
         box.columnconfigure(0, weight=1)
         ttk.Label(box, text=label, style="Muted.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(box, textvariable=variable, style="Detail.TLabel", wraplength=420).grid(
-            row=1, column=0, sticky="ew", pady=(3, 0)
+        text = tk.Text(
+            box,
+            height=2,
+            wrap="word",
+            borderwidth=0,
+            highlightthickness=1,
+            highlightbackground="#e5e7eb",
+            highlightcolor="#93c5fd",
+            background="#ffffff",
+            foreground="#111827",
+            font=("Noto Sans CJK SC", 10),
+            padx=6,
+            pady=4,
         )
+        text.grid(row=1, column=0, sticky="ew", pady=(3, 0))
+
+        def sync_text(*_args) -> None:
+            text.configure(state="normal")
+            text.delete("1.0", tk.END)
+            text.insert("1.0", variable.get())
+            text.configure(state="disabled")
+
+        variable.trace_add("write", sync_text)
+        sync_text()
 
     def refresh(self) -> None:
         self.sessions = load_sessions(include_claude=True)
