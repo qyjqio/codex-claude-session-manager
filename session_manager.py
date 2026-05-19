@@ -118,6 +118,7 @@ def base_session(path: pathlib.Path, source: str, session_id: str, title: str, c
         "time": _dt.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
         "session_id": session_id,
         "size": human_size(stat.st_size),
+        "bytes": stat.st_size,
         "title": redact(title)[:180] or "未找到用户正文",
         "path": str(path),
         "cwd": cwd,
@@ -328,6 +329,8 @@ class App(tk.Tk):
         self.search_var = tk.StringVar()
         self.prompt_var = tk.StringVar(value="")
         self.source_filter_var = tk.StringVar(value="Codex")
+        self.sort_column = "time"
+        self.sort_reverse = True
         self.status_var = tk.StringVar()
         self.detail_title_var = tk.StringVar(value="未选择会话")
         self.detail_meta_var = tk.StringVar(value="从左侧列表选择一条记录")
@@ -422,12 +425,16 @@ class App(tk.Tk):
 
         columns = ("source", "time", "size", "note", "title", "session_id")
         self.tree = ttk.Treeview(list_panel, columns=columns, show="headings", selectmode="extended")
-        self.tree.heading("source", text="来源")
-        self.tree.heading("time", text="时间")
-        self.tree.heading("size", text="大小")
-        self.tree.heading("note", text="备注")
-        self.tree.heading("title", text="主题/首条用户消息")
-        self.tree.heading("session_id", text="Session ID")
+        self.heading_labels = {
+            "source": "来源",
+            "time": "时间",
+            "size": "大小",
+            "note": "备注",
+            "title": "主题/首条用户消息",
+            "session_id": "Session ID",
+        }
+        for column, label in self.heading_labels.items():
+            self.tree.heading(column, text=label, command=lambda col=column: self.sort_by_column(col))
         self.tree.column("source", width=72, minwidth=64, anchor=tk.W, stretch=False)
         self.tree.column("time", width=135, minwidth=125, anchor=tk.W, stretch=False)
         self.tree.column("size", width=70, minwidth=64, anchor=tk.E, stretch=False)
@@ -530,11 +537,43 @@ class App(tk.Tk):
         variable.trace_add("write", sync_text)
         sync_text()
 
+    def sort_key(self, item: dict, column: str):
+        if column == "time":
+            return item.get("mtime", 0)
+        if column == "size":
+            return item.get("bytes", 0)
+        if column == "note":
+            return self.notes.get(session_key(item), "").lower()
+        if column == "title":
+            return item.get("title", "").lower()
+        if column == "session_id":
+            return item.get("session_id", "").lower()
+        if column == "source":
+            return item.get("source", "").lower()
+        return ""
+
+    def sort_by_column(self, column: str) -> None:
+        if self.sort_column == column:
+            self.sort_reverse = not self.sort_reverse
+        else:
+            self.sort_column = column
+            self.sort_reverse = column in {"time", "size"}
+        self.apply_filter(select_first=True)
+
+    def update_headings(self) -> None:
+        for column, label in self.heading_labels.items():
+            if column == self.sort_column:
+                arrow = "↓" if self.sort_reverse else "↑"
+                text = f"{label} {arrow}"
+            else:
+                text = label
+            self.tree.heading(column, text=text, command=lambda col=column: self.sort_by_column(col))
+
     def refresh(self) -> None:
         self.sessions = load_sessions(include_claude=True)
         self.apply_filter()
 
-    def apply_filter(self) -> None:
+    def apply_filter(self, select_first: bool = True) -> None:
         needle = self.search_var.get().strip().lower()
         source_filter = self.source_filter_var.get()
         self.filtered = []
@@ -556,6 +595,9 @@ class App(tk.Tk):
                 if needle not in haystack:
                     continue
             self.filtered.append(item)
+
+        self.filtered.sort(key=lambda item: self.sort_key(item, self.sort_column), reverse=self.sort_reverse)
+        self.update_headings()
 
         self.tree.delete(*self.tree.get_children())
         for index, item in enumerate(self.filtered):
@@ -580,11 +622,11 @@ class App(tk.Tk):
         self.status_var.set(
             f"共 {len(self.sessions)} 个会话（{count_text}），当前显示 {len(self.filtered)} 个。双击记录可恢复对话。"
         )
-        if self.filtered:
+        if self.filtered and select_first:
             self.tree.selection_set("0")
             self.tree.focus("0")
             self.update_detail()
-        else:
+        elif not self.filtered:
             self.clear_detail()
 
     def clear_detail(self) -> None:
@@ -626,11 +668,7 @@ class App(tk.Tk):
             messagebox.showerror("保存失败", f"无法保存备注：{exc}")
             return
 
-        selection = self.tree.selection()
-        if selection:
-            values = list(self.tree.item(selection[0], "values"))
-            values[3] = note
-            self.tree.item(selection[0], values=values)
+        self.apply_filter(select_first=False)
         self.status_var.set(f"备注已保存到 {NOTES_FILE}")
 
     def selected_items(self) -> list[dict]:
