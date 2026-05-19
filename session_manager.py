@@ -15,6 +15,7 @@ CODEX_SESSIONS_ROOT = pathlib.Path.home() / ".codex" / "sessions"
 CLAUDE_PROJECTS_ROOT = pathlib.Path.home() / ".claude" / "projects"
 NOTES_FILE = pathlib.Path.home() / ".chat_session_notes.json"
 DELETED_ROOT = pathlib.Path.home() / ".chat_session_deleted"
+CLAUDE_SESSIONS_ROOT = pathlib.Path.home() / ".claude" / "sessions"
 API_PROMO_URL = "https://api.qyjqio.com/"
 
 
@@ -71,6 +72,23 @@ def save_notes(notes: dict) -> None:
     )
 
 
+def load_claude_resumable_ids() -> set[str]:
+    ids: set[str] = set()
+    if not CLAUDE_SESSIONS_ROOT.exists():
+        return ids
+    for f in CLAUDE_SESSIONS_ROOT.iterdir():
+        if f.suffix != ".json":
+            continue
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+            sid = data.get("sessionId")
+            if sid:
+                ids.add(sid)
+        except (OSError, json.JSONDecodeError):
+            continue
+    return ids
+
+
 def unique_path(path: pathlib.Path) -> pathlib.Path:
     if not path.exists():
         return path
@@ -110,7 +128,15 @@ def first_text_from_claude_content(content) -> str:
     return ""
 
 
-def base_session(path: pathlib.Path, source: str, session_id: str, title: str, cwd: str = "", created: str = "") -> dict:
+def base_session(
+    path: pathlib.Path,
+    source: str,
+    session_id: str,
+    title: str,
+    cwd: str = "",
+    created: str = "",
+    resume_cwd: str = "",
+) -> dict:
     stat = path.stat()
     return {
         "source": source,
@@ -122,6 +148,7 @@ def base_session(path: pathlib.Path, source: str, session_id: str, title: str, c
         "title": redact(title)[:180] or "未找到用户正文",
         "path": str(path),
         "cwd": cwd,
+        "resume_cwd": resume_cwd or cwd,
         "created": created,
     }
 
@@ -177,7 +204,11 @@ def parse_codex_session(path: pathlib.Path) -> dict:
 
 def parse_claude_session(path: pathlib.Path) -> dict:
     session_id = path.stem
-    cwd = ""
+    first_cwd = ""
+    first_user_cwd = ""
+    last_cwd = ""
+    last_user_cwd = ""
+    cwd_history = []
     created = ""
     title = ""
 
@@ -190,14 +221,31 @@ def parse_claude_session(path: pathlib.Path) -> dict:
                     continue
 
                 session_id = obj.get("sessionId") or session_id
-                cwd = obj.get("cwd") or cwd
-                created = obj.get("timestamp") or created
 
                 if obj.get("isSidechain"):
                     continue
+
+                obj_cwd = obj.get("cwd") or ""
+                if obj_cwd:
+                    if not first_cwd:
+                        first_cwd = obj_cwd
+                    last_cwd = obj_cwd
+                    if obj_cwd not in cwd_history:
+                        cwd_history.append(obj_cwd)
+
                 if obj.get("type") != "user":
                     continue
 
+                if obj.get("timestamp") and not created:
+                    created = obj.get("timestamp")
+
+                if obj_cwd:
+                    if not first_user_cwd:
+                        first_user_cwd = obj_cwd
+                    last_user_cwd = obj_cwd
+
+                if title:
+                    continue
                 message = obj.get("message") or {}
                 if isinstance(message, dict):
                     text = first_text_from_claude_content(message.get("content"))
@@ -205,11 +253,21 @@ def parse_claude_session(path: pathlib.Path) -> dict:
                     text = str(message)
                 if text.strip():
                     title = text
-                    break
     except OSError:
         pass
 
-    return base_session(path, "Claude", session_id, title, cwd, created)
+    resume_cwd = first_user_cwd or first_cwd
+    home = str(pathlib.Path.home())
+    ignored = {home, "/tmp"}
+    meaningful_cwds = [
+        cwd
+        for cwd in cwd_history
+        if cwd not in ignored and not cwd.startswith(f"{home}/.claude")
+    ]
+    display_cwd = meaningful_cwds[-1] if meaningful_cwds else (last_user_cwd or last_cwd or resume_cwd)
+    item = base_session(path, "Claude", session_id, title, display_cwd, created, resume_cwd=resume_cwd)
+    item["cwd_history"] = " | ".join(cwd_history)
+    return item
 
 
 def load_sessions(include_claude: bool = True) -> list[dict]:
@@ -217,15 +275,20 @@ def load_sessions(include_claude: bool = True) -> list[dict]:
     if CODEX_SESSIONS_ROOT.exists():
         for path in CODEX_SESSIONS_ROOT.rglob("rollout-*.jsonl"):
             try:
-                sessions.append(parse_codex_session(path))
+                item = parse_codex_session(path)
+                item["resumable"] = True
+                sessions.append(item)
             except OSError:
                 continue
     if include_claude and CLAUDE_PROJECTS_ROOT.exists():
+        claude_resumable = load_claude_resumable_ids()
         for path in CLAUDE_PROJECTS_ROOT.rglob("*.jsonl"):
             if "/subagents/" in str(path):
                 continue
             try:
-                sessions.append(parse_claude_session(path))
+                item = parse_claude_session(path)
+                item["resumable"] = item["session_id"] in claude_resumable
+                sessions.append(item)
             except OSError:
                 continue
     sessions.sort(key=lambda item: item["mtime"], reverse=True)
@@ -250,7 +313,7 @@ def find_terminal() -> str | None:
 def resume_command(item: dict, prompt: str = "") -> str:
     session_id = item.get("session_id", "")
     source = item.get("source", "Codex")
-    cwd = item.get("cwd") or ""
+    cwd = item.get("resume_cwd") or item.get("cwd") or ""
     if source == "Claude":
         command = f"claude --resume {shlex.quote(session_id)}"
     else:
@@ -328,7 +391,7 @@ class App(tk.Tk):
 
         self.search_var = tk.StringVar()
         self.prompt_var = tk.StringVar(value="")
-        self.source_filter_var = tk.StringVar(value="Codex")
+        self.source_filter_var = tk.StringVar(value="全部")
         self.sort_column = "time"
         self.sort_reverse = True
         self.status_var = tk.StringVar()
@@ -336,6 +399,8 @@ class App(tk.Tk):
         self.detail_meta_var = tk.StringVar(value="从左侧列表选择一条记录")
         self.detail_id_var = tk.StringVar(value="-")
         self.detail_cwd_var = tk.StringVar(value="-")
+        self.detail_resume_cwd_var = tk.StringVar(value="-")
+        self.detail_cwd_history_var = tk.StringVar(value="-")
         self.detail_path_var = tk.StringVar(value="-")
         self.detail_command_var = tk.StringVar(value="-")
         self.detail_note_var = tk.StringVar(value="")
@@ -488,7 +553,7 @@ class App(tk.Tk):
         self.tree.configure(yscrollcommand=y_scrollbar.set, xscrollcommand=x_scrollbar.set)
 
         detail_panel.columnconfigure(0, weight=1)
-        detail_panel.rowconfigure(9, weight=1)
+        detail_panel.rowconfigure(11, weight=1)
         self.detail_title_label = ttk.Label(
             detail_panel,
             textvariable=self.detail_title_var,
@@ -508,11 +573,13 @@ class App(tk.Tk):
 
         self.add_detail_row(detail_panel, 2, "Session ID", self.detail_id_var)
         self.add_detail_row(detail_panel, 3, "工作目录", self.detail_cwd_var)
-        self.add_detail_row(detail_panel, 4, "记录文件", self.detail_path_var)
-        self.add_detail_row(detail_panel, 5, "恢复命令", self.detail_command_var)
+        self.add_detail_row(detail_panel, 4, "恢复目录", self.detail_resume_cwd_var)
+        self.add_detail_row(detail_panel, 5, "目录历史", self.detail_cwd_history_var)
+        self.add_detail_row(detail_panel, 6, "记录文件", self.detail_path_var)
+        self.add_detail_row(detail_panel, 7, "恢复命令", self.detail_command_var)
 
         note_box = ttk.Frame(detail_panel, style="Panel.TFrame")
-        note_box.grid(row=6, column=0, sticky="ew", pady=(14, 8))
+        note_box.grid(row=8, column=0, sticky="ew", pady=(14, 8))
         note_box.columnconfigure(0, weight=1)
         ttk.Label(note_box, text="备注", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         note_entry = ttk.Entry(note_box, textvariable=self.detail_note_var)
@@ -523,7 +590,7 @@ class App(tk.Tk):
         )
 
         prompt_box = ttk.Frame(detail_panel, style="Panel.TFrame")
-        prompt_box.grid(row=7, column=0, sticky="ew", pady=(8, 8))
+        prompt_box.grid(row=9, column=0, sticky="ew", pady=(8, 8))
         prompt_box.columnconfigure(0, weight=1)
         ttk.Label(prompt_box, text="恢复后追加提示", style="Muted.TLabel").grid(row=0, column=0, sticky="w")
         prompt_entry = ttk.Entry(prompt_box, textvariable=self.prompt_var)
@@ -531,7 +598,7 @@ class App(tk.Tk):
         prompt_entry.bind("<KeyRelease>", lambda _event: self.update_detail())
 
         action_frame = ttk.Frame(detail_panel, style="Panel.TFrame")
-        action_frame.grid(row=8, column=0, sticky="ew", pady=(10, 0))
+        action_frame.grid(row=10, column=0, sticky="ew", pady=(10, 0))
         action_frame.columnconfigure((0, 1), weight=1)
         ttk.Button(action_frame, text="恢复对话", style="Accent.TButton", command=self.resume_selected).grid(
             row=0, column=0, sticky="ew", padx=(0, 6)
@@ -545,6 +612,17 @@ class App(tk.Tk):
         ttk.Button(action_frame, text="删除选中聊天", style="Tool.TButton", command=self.delete_selected).grid(
             row=2, column=0, columnspan=2, sticky="ew", pady=(8, 0)
         )
+        self.resume_warning_label = tk.Label(
+            action_frame,
+            text="⚠ 该 Claude 会话已从会话管理器清理，恢复可能失败",
+            fg="#dc2626",
+            bg="#ffffff",
+            font=("Noto Sans CJK SC", 9),
+            anchor="w",
+            justify="left",
+        )
+        self.resume_warning_label.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        self.resume_warning_label.grid_remove()
 
         bottom = ttk.Frame(self, style="App.TFrame", padding=(14, 0, 14, 12))
         bottom.grid(row=4, column=0, sticky="ew")
@@ -677,9 +755,12 @@ class App(tk.Tk):
         self.detail_meta_var.set("调整来源或搜索条件后再试")
         self.detail_id_var.set("-")
         self.detail_cwd_var.set("-")
+        self.detail_resume_cwd_var.set("-")
+        self.detail_cwd_history_var.set("-")
         self.detail_path_var.set("-")
         self.detail_command_var.set("-")
         self.detail_note_var.set("")
+        self.resume_warning_label.grid_remove()
 
     def update_detail(self) -> None:
         selection = self.tree.selection()
@@ -691,9 +772,15 @@ class App(tk.Tk):
         self.detail_meta_var.set(f"{item['source']} · {item['time']} · {item['size']}")
         self.detail_id_var.set(item["session_id"] or "-")
         self.detail_cwd_var.set(item.get("cwd") or "-")
+        self.detail_resume_cwd_var.set(item.get("resume_cwd") or item.get("cwd") or "-")
+        self.detail_cwd_history_var.set(item.get("cwd_history") or item.get("cwd") or "-")
         self.detail_path_var.set(item["path"])
         self.detail_command_var.set(resume_command(item, self.prompt_var.get()))
         self.detail_note_var.set(self.notes.get(session_key(item), ""))
+        if item.get("source") == "Claude" and not item.get("resumable", True):
+            self.resume_warning_label.grid()
+        else:
+            self.resume_warning_label.grid_remove()
 
     def save_current_note(self) -> None:
         item = self.selected_item()
