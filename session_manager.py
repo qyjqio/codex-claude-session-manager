@@ -415,9 +415,42 @@ class App(tk.Tk):
         main.grid(row=3, column=0, sticky="nsew", padx=14, pady=(0, 12))
 
         list_panel = ttk.Frame(main, style="Panel.TFrame", padding=10)
-        detail_panel = ttk.Frame(main, style="Panel.TFrame", padding=14)
+        detail_shell = ttk.Frame(main, style="Panel.TFrame", padding=0)
         main.add(list_panel, weight=5)
-        main.add(detail_panel, weight=1)
+        main.add(detail_shell, weight=1)
+
+        detail_shell.columnconfigure(0, weight=1)
+        detail_shell.rowconfigure(0, weight=1)
+        detail_canvas = tk.Canvas(detail_shell, borderwidth=0, highlightthickness=0, background="#ffffff")
+        detail_scrollbar = ttk.Scrollbar(detail_shell, orient=tk.VERTICAL, command=detail_canvas.yview)
+        detail_panel = ttk.Frame(detail_canvas, style="Panel.TFrame", padding=14)
+        detail_window = detail_canvas.create_window((0, 0), window=detail_panel, anchor="nw")
+        detail_canvas.configure(yscrollcommand=detail_scrollbar.set)
+        detail_canvas.grid(row=0, column=0, sticky="nsew")
+        detail_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        def update_detail_scrollregion(_event=None) -> None:
+            detail_canvas.configure(scrollregion=detail_canvas.bbox("all"))
+
+        def resize_detail_window(event) -> None:
+            detail_canvas.itemconfigure(detail_window, width=event.width)
+
+        def detail_mousewheel(event) -> None:
+            if event.num == 4:
+                detail_canvas.yview_scroll(-3, "units")
+            elif event.num == 5:
+                detail_canvas.yview_scroll(3, "units")
+            elif event.delta:
+                detail_canvas.yview_scroll(int(-event.delta / 120) * 3, "units")
+
+        detail_panel.bind("<Configure>", update_detail_scrollregion)
+        detail_canvas.bind("<Configure>", resize_detail_window)
+        detail_canvas.bind("<MouseWheel>", detail_mousewheel)
+        detail_canvas.bind("<Button-4>", detail_mousewheel)
+        detail_canvas.bind("<Button-5>", detail_mousewheel)
+        detail_panel.bind("<MouseWheel>", detail_mousewheel)
+        detail_panel.bind("<Button-4>", detail_mousewheel)
+        detail_panel.bind("<Button-5>", detail_mousewheel)
 
         list_panel.columnconfigure(0, weight=1)
         list_panel.rowconfigure(1, weight=1)
