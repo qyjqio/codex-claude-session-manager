@@ -317,7 +317,7 @@ def resume_command(item: dict, prompt: str = "") -> str:
     if source == "Claude":
         command = f"claude --resume {shlex.quote(session_id)}"
     else:
-        command = f"codex resume {shlex.quote(session_id)}"
+        command = f"codex -s danger-full-access resume {shlex.quote(session_id)}"
 
     if prompt.strip():
         command += " " + shlex.quote(prompt.strip())
