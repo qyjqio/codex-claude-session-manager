@@ -317,8 +317,8 @@ class App(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("Codex / Claude 聊天记录恢复工具")
-        self.geometry("1360x820")
-        self.minsize(1040, 620)
+        self.geometry("1220x780")
+        self.minsize(860, 560)
         self.configure(bg="#f6f7fb")
 
         self.sessions: list[dict] = []
@@ -413,8 +413,8 @@ class App(tk.Tk):
 
         list_panel = ttk.Frame(main, style="Panel.TFrame", padding=10)
         detail_panel = ttk.Frame(main, style="Panel.TFrame", padding=14)
-        main.add(list_panel, weight=4)
-        main.add(detail_panel, weight=2)
+        main.add(list_panel, weight=5)
+        main.add(detail_panel, weight=1)
 
         list_panel.columnconfigure(0, weight=1)
         list_panel.rowconfigure(1, weight=1)
@@ -449,7 +449,7 @@ class App(tk.Tk):
 
         detail_panel.columnconfigure(0, weight=1)
         detail_panel.rowconfigure(9, weight=1)
-        ttk.Label(detail_panel, textvariable=self.detail_title_var, style="DetailTitle.TLabel", wraplength=420).grid(
+        ttk.Label(detail_panel, textvariable=self.detail_title_var, style="DetailTitle.TLabel", wraplength=280).grid(
             row=0, column=0, sticky="ew"
         )
         ttk.Label(detail_panel, textvariable=self.detail_meta_var, style="Muted.TLabel").grid(
