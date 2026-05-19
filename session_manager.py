@@ -489,9 +489,19 @@ class App(tk.Tk):
 
         detail_panel.columnconfigure(0, weight=1)
         detail_panel.rowconfigure(9, weight=1)
-        ttk.Label(detail_panel, textvariable=self.detail_title_var, style="DetailTitle.TLabel", wraplength=280).grid(
-            row=0, column=0, sticky="ew"
+        self.detail_title_label = ttk.Label(
+            detail_panel,
+            textvariable=self.detail_title_var,
+            style="DetailTitle.TLabel",
+            wraplength=260,
+            justify=tk.LEFT,
         )
+        self.detail_title_label.grid(row=0, column=0, sticky="ew")
+
+        def resize_detail_title(event) -> None:
+            self.detail_title_label.configure(wraplength=max(160, event.width - 28))
+
+        detail_panel.bind("<Configure>", resize_detail_title, add="+")
         ttk.Label(detail_panel, textvariable=self.detail_meta_var, style="Muted.TLabel").grid(
             row=1, column=0, sticky="ew", pady=(6, 16)
         )
